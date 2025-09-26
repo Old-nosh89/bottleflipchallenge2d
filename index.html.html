@@ -1,0 +1,435 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bottle Flip Challenge</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #e6f3ff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #game {
+            display: none;
+            border: 2px solid #333;
+            background-color: #fff;
+        }
+        #intro, #gameOverScreen {
+            text-align: center;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+            max-width: 500px;
+            position: absolute;
+        }
+        #intro h1, #gameOverScreen h1 {
+            color: #1a73e8;
+            margin-bottom: 15px;
+        }
+        #intro p, #gameOverScreen p {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        #startButton, #tryAgainButton {
+            padding: 10px 20px;
+            font-size: 18px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #startButton:hover, #tryAgainButton:hover {
+            background-color: #1557b0;
+        }
+        #score, #timer {
+            position: absolute;
+            top: 10px;
+            font-size: 24px;
+            color: #333;
+            font-weight: bold;
+        }
+        #score {
+            left: 20px;
+        }
+        #timer {
+            right: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="intro">
+        <h1>Bottle Flip Challenge</h1>
+        <p>Welcome to the Bottle Flip Challenge! Click and drag the water bottle in any direction to lift and flip it. Release to flip; land it perfectly on its cap or bottom to score a point. Your goal is to achieve 10 successful flips within 3 minutes. The bottle stays on the ground until you drag it again. Can you master the flip?</p>
+        <button id="startButton">Start Game</button>
+    </div>
+    <div id="gameOverScreen" style="display: none;">
+        <h1 id="gameOverTitle"></h1>
+        <p id="gameOverMessage"></p>
+        <button id="tryAgainButton">Try Again</button>
+    </div>
+    <canvas id="game" width="400" height="600"></canvas>
+    <div id="score">Score: 0</div>
+    <div id="timer">Time: 3:00</div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const groundY = canvas.height - 20;
+        const bottle = {
+            x: canvas.width / 2,
+            y: canvas.height - 20,
+            angle: 0,
+            vx: 0,
+            vy: 0,
+            av: 720 + Math.random() * 180,
+            width: 40,
+            height: 120,
+            capHeight: 15,
+            neckHeight: 20,
+            bodyWidth: 40,
+            neckWidth: 20
+        };
+        const initialX = canvas.width / 2;
+        const initialY = canvas.height - 20;
+        bottle.x = initialX;
+        bottle.y = initialY;
+        const gravity = 900;
+        const friction = 0.95;
+
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let score = 0;
+        let timeLeft = 180;
+        let gameOver = false;
+        let inAir = false;
+        let lastTime = performance.now();
+        let timerInterval;
+        let gameStarted = false;
+
+        // UI elements
+        const intro = document.getElementById('intro');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const gameOverTitle = document.getElementById('gameOverTitle');
+        const gameOverMessage = document.getElementById('gameOverMessage');
+        const startButton = document.getElementById('startButton');
+        const tryAgainButton = document.getElementById('tryAgainButton');
+
+        function resetGame() {
+            score = 0;
+            timeLeft = 180;
+            gameOver = false;
+            inAir = false;
+            bottle.x = initialX;
+            bottle.y = initialY;
+            bottle.angle = 0;
+            bottle.vx = 0;
+            bottle.vy = 0;
+            bottle.av = 720 + Math.random() * 180;
+            document.getElementById('score').innerText = `Score: ${score}`;
+            document.getElementById('timer').innerText = `Time: 3:00`;
+            gameOverScreen.style.display = 'none';
+            canvas.style.display = 'block';
+            if (timerInterval) clearInterval(timerInterval);
+            startTimer();
+            update();
+        }
+
+        startButton.addEventListener('click', () => {
+            intro.style.display = 'none';
+            canvas.style.display = 'block';
+            gameStarted = true;
+            resetGame();
+        });
+
+        tryAgainButton.addEventListener('click', resetGame);
+
+        // Timer
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if (!gameOver) {
+                    timeLeft--;
+                    updateTimer();
+                }
+            }, 1000);
+            updateTimer();
+        }
+
+        function updateTimer() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            document.getElementById('timer').innerText = `Time: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+            if (timeLeft <= 0 && !gameOver) {
+                clearInterval(timerInterval);
+                gameOver = true;
+                showGameOver(false);
+            }
+        }
+
+        function showGameOver(won) {
+            canvas.style.display = 'none';
+            gameOverScreen.style.display = 'block';
+            if (won) {
+                gameOverTitle.innerText = 'You Win, Congrats!';
+                gameOverMessage.innerText = 'You successfully landed 10 flips within 3 minutes!';
+            } else {
+                gameOverTitle.innerText = 'You Lose, Try Again';
+                gameOverMessage.innerText = 'Time ran out before you could land 10 flips.';
+            }
+        }
+
+        // Events
+        canvas.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+
+        function onMouseDown(e) {
+            if (gameOver || !gameStarted) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const rad = bottle.angle * Math.PI / 180;
+            const projX = (bottle.height / 2) * Math.abs(Math.sin(rad)) + (bottle.width / 2) * Math.abs(Math.cos(rad));
+            const projY = (bottle.height / 2) * Math.abs(Math.cos(rad)) + (bottle.width / 2) * Math.abs(Math.sin(rad));
+            if (Math.abs(mx - bottle.x) < projX && Math.abs(my - bottle.y) < projY) {
+                dragging = true;
+                startX = mx;
+                startY = my;
+                bottle.vx = 0;
+                bottle.vy = 0;
+                bottle.av = 720 + Math.random() * 180;
+                bottle.angle = 0;
+                inAir = false;
+            }
+        }
+
+        function onMouseMove(e) {
+            if (dragging && gameStarted) {
+                const rect = canvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                bottle.x = Math.max(bottle.width / 2, Math.min(canvas.width - bottle.width / 2, mx));
+                bottle.y = Math.max(bottle.height / 2, Math.min(groundY, my));
+                bottle.angle = 0;
+            }
+        }
+
+        function onMouseUp(e) {
+            if (dragging && gameStarted) {
+                dragging = false;
+                const rect = canvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                const dx = mx - startX;
+                const dy = startY - my;
+                const dragDistance = Math.sqrt(dx * dx + dy * dy);
+                if (dragDistance > 20) {
+                    bottle.vy = -(dy * 2.5 + Math.random() * 50);
+                    bottle.vx = dx * 2;
+                    bottle.av += (Math.random() * 90 - 45) + dx * 2;
+                    inAir = true;
+                } else {
+                    inAir = true;
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Ground
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(0, groundY, canvas.width, 20);
+            ctx.fillStyle = 'rgba(139, 69, 19, 0.3)';
+            for (let i = 0; i < canvas.width; i += 10) {
+                ctx.fillRect(i, groundY, 5, 20);
+            }
+
+            // Bottle
+            ctx.save();
+            ctx.translate(bottle.x, bottle.y);
+            ctx.rotate(bottle.angle * Math.PI / 180);
+
+            // Bottle shape
+            const hw = bottle.bodyWidth / 2;
+            const nw = bottle.neckWidth / 2;
+            const h = bottle.height;
+            const ch = bottle.capHeight;
+            const nh = bottle.neckHeight;
+
+            // Body
+            ctx.beginPath();
+            ctx.moveTo(-hw, -h / 2 + ch + nh);
+            ctx.lineTo(-hw * 0.8, h / 2 - ch);
+            ctx.lineTo(hw * 0.8, h / 2 - ch);
+            ctx.lineTo(hw, -h / 2 + ch + nh);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(200, 200, 200, 0.5)';
+            ctx.fill();
+
+            // Water
+            ctx.save();
+            ctx.clip();
+            ctx.beginPath();
+            ctx.moveTo(-hw * 0.9, -h / 2 + ch + nh + 10);
+            ctx.lineTo(-hw * 0.7, h / 2 - ch - 10);
+            ctx.lineTo(hw * 0.7, h / 2 - ch - 10);
+            ctx.lineTo(hw * 0.9, -h / 2 + ch + nh + 10);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(0, 100, 255, 0.4)';
+            ctx.fill();
+            ctx.restore();
+
+            // Neck
+            ctx.beginPath();
+            ctx.moveTo(-nw, -h / 2 + ch);
+            ctx.lineTo(-nw, -h / 2 + ch + nh);
+            ctx.lineTo(nw, -h / 2 + ch + nh);
+            ctx.lineTo(nw, -h / 2 + ch);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(200, 200, 200, 0.6)';
+            ctx.fill();
+
+            // Cap
+            ctx.fillStyle = '#ff4444';
+            ctx.fillRect(-nw, -h / 2, nw * 2, ch);
+
+            // Bottom
+            ctx.fillStyle = '#999';
+            ctx.fillRect(-hw * 0.8, h / 2 - ch, hw * 1.6, ch);
+
+            // Label
+            ctx.fillStyle = 'white';
+            ctx.fillRect(-hw * 0.7, -10, hw * 1.4, 20);
+            ctx.fillStyle = 'black';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Aqua', 0, 5);
+
+            // Shine
+            ctx.beginPath();
+            ctx.moveTo(-hw * 0.7, -h / 2 + ch + nh);
+            ctx.lineTo(-hw * 0.6, h / 2 - ch);
+            ctx.lineTo(-hw * 0.4, h / 2 - ch);
+            ctx.lineTo(-hw * 0.5, -h / 2 + ch + nh);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function update() {
+            if (!gameStarted || gameOver) return;
+
+            const now = performance.now();
+            const dt = Math.min((now - lastTime) / 1000, 0.033);
+            lastTime = now;
+
+            if (inAir && !dragging) {
+                bottle.vy += gravity * dt;
+                bottle.x += bottle.vx * dt;
+                bottle.y += bottle.vy * dt;
+                bottle.angle += bottle.av * dt;
+
+                // Keep in bounds
+                bottle.x = Math.max(bottle.width / 2, Math.min(canvas.width - bottle.width / 2, bottle.x));
+
+                // Check landing
+                const rad = bottle.angle * Math.PI / 180;
+                const proj = (bottle.height / 2) * Math.abs(Math.cos(rad)) + (bottle.width / 2) * Math.abs(Math.sin(rad));
+                const lowestY = bottle.y + proj;
+
+                if (lowestY >= groundY && bottle.vy > 0) {
+                    inAir = false;
+                    bottle.y = groundY - proj;
+                    let normAngle = ((bottle.angle % 360) + 360) % 360;
+                    const isBottom = Math.abs(normAngle - 0) < 10 || Math.abs(normAngle - 360) < 10;
+                    const isCap = Math.abs(normAngle - 180) < 10;
+
+                    if (isBottom || isCap) {
+                        bottle.vy = 0;
+                        bottle.vx = 0;
+                        bottle.av = 0;
+                        bottle.angle = isCap ? 180 : 0;
+                        score++;
+                        document.getElementById('score').innerText = `Score: ${score}`;
+                        if (score >= 10) {
+                            clearInterval(timerInterval);
+                            gameOver = true;
+                            showGameOver(true);
+                        }
+                    } else {
+                        const targetAngle = normAngle < 180 ? 90 : 270;
+                        bottle.angle = targetAngle;
+                        bottle.vy = 0;
+                        bottle.vx = 0;
+                        bottle.av = 0;
+                    }
+                }
+            } else if (!dragging) {
+                const rad = bottle.angle * Math.PI / 180;
+                const proj = (bottle.height / 2) * Math.abs(Math.cos(rad)) + (bottle.width / 2) * Math.abs(Math.sin(rad));
+                bottle.y = groundY - proj;
+                bottle.vy = 0;
+                bottle.vx = 0;
+                bottle.av = 0;
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        draw();
+    </script>
+</body>
+</html>
